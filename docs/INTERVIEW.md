@@ -241,6 +241,99 @@ kubectl --context kind-mini-mlops -n mini-mlops get pods -l app=worker
 
 This is manual scaling. There is no HPA, KEDA, production ingress, or cloud cluster provisioning. API readiness checks PostgreSQL; it does not prove Redis, model registry, and worker availability. Stateful services have a single replica and use a Recreate strategy. Do not claim high availability or zero-downtime releases.
 
+### High concurrency: what to change, and who does what
+
+Suppose many users submit predictions at the same time. There are two separate
+stages to consider: **accepting HTTP requests** and **executing queued predictions**.
+FastAPI returns HTTP 202 after saving/enqueueing a job; that does not mean the
+prediction has finished. Redis buffers waiting messages while Celery processes them.
+
+**Example: workers cannot finish jobs quickly enough.** Imagine a heavier model
+takes one second per prediction and ten jobs arrive in a burst. With one worker
+Pod and `--concurrency=1`, it executes roughly one job at a time, taking about ten
+seconds to clear that burst. With three ready worker Pods, up to three jobs can
+execute together: roughly four one-second waves for ten jobs. This is an illustrative
+calculation, not an Iris benchmark; startup, model loading, CPU, and database work
+also affect real completion times.
+
+| Parameter or component | What changing it does | Where it is configured |
+|---|---|---|
+| `worker_replicas`: 1 -> 3 | Requests three Celery worker Pods consuming the same Redis queue | The variable and worker recipe in [main.tf](../terraform/main.tf) |
+| Celery `--concurrency=1` -> `--concurrency=2` | Allows two task execution processes per worker Pod; uses more CPU/memory | The worker `command` in [main.tf](../terraform/main.tf) |
+| API recipe `replicas = 1` -> `2` | Requests two API Pods for HTTP-serving capacity | The `api` entry in [main.tf](../terraform/main.tf); there is currently no `api_replicas` variable |
+| CPU/memory `requests` and `limits` | Requests influence scheduling; limits cap each container's usage | The Deployment resource's `resources` block in [main.tf](../terraform/main.tf) |
+
+Potential simultaneous predictions are approximately **worker Pods x Celery
+concurrency per Pod**. Three Pods with concurrency 1 allow three task executions;
+three Pods with concurrency 2 allow six. This is concurrency, not requests per
+second, and it does not guarantee a proportional throughput improvement.
+
+**Demonstrate manual worker scaling in WSL:**
+
+```bash
+source /mnt/c/Users/pcc20/Documents/Codex/2026-10-28/can-x20/outputs/mini-mlops/demo-env.sh
+
+# Check how many messages are waiting. This excludes tasks already executing.
+kubectl --context kind-mini-mlops -n mini-mlops exec deployment/redis -- redis-cli LLEN celery
+
+# Preview changing the desired worker count from one to three.
+terraform -chdir=terraform plan -var='worker_replicas=3'
+
+# Apply the change; review the plan and type yes at the prompt.
+terraform -chdir=terraform apply -var='worker_replicas=3'
+
+# Wait until all three requested worker Pods are ready, then display them.
+kubectl --context kind-mini-mlops -n mini-mlops rollout status deployment/worker --timeout=180s
+kubectl --context kind-mini-mlops -n mini-mlops get deployment worker
+kubectl --context kind-mini-mlops -n mini-mlops get pods -l app=worker
+
+# Return to the small default after the demonstration; approve when prompted.
+terraform -chdir=terraform apply -var='worker_replicas=1'
+```
+
+When you apply `worker_replicas=3`, these are the responsibilities:
+
+1. **You choose three replicas.** Terraform does not monitor traffic or select this number automatically.
+2. **Terraform sends an update to the Kubernetes API:** "Please make the worker Deployment maintain three Pods."
+3. **Kubernetes updates the existing Deployment/ReplicaSet's desired count.** The ReplicaSet creates the extra Pods; the scheduler places them on the node, and the node starts their containers.
+4. **The new Celery processes connect to Redis.** They independently consume messages from the same queue, allowing several predictions to run together. The worker does not need a Kubernetes HTTP Service.
+5. **PostgreSQL receives their saved statuses/results.** Check queue depth, worker logs, completion times, and resource use to see whether the change helped.
+
+Changing only the replica count uses the existing image and Pod template; it does
+not rebuild the image or create three separate Deployments. The `-var` value applies
+to that Terraform invocation and does not edit the variable's default in `main.tf`.
+Use the same intended value in future applies, or maintain it in your variable settings.
+
+**If the bottleneck is accepting HTTP requests instead:** change the API recipe's
+replica count and apply. A Kubernetes Service can distribute connections across
+matching ready API Pods; it does not run predictions or decide how many replicas
+to create. Our localhost `kubectl port-forward service/api` tunnel selects one Pod,
+so it is not a demonstration of production HTTP load balancing. A real ingress or
+load-balancer path and per-Pod metrics discovery would be needed for that demonstration.
+
+More worker Pods help only while CPU, memory, Redis, and PostgreSQL have capacity.
+They still share this laptop's single node. Extra Pods can remain `Pending` if their
+requests cannot fit; increasing replicas does not add physical laptop resources.
+For continuous load, processing capacity must exceed the arrival rate to drain a
+backlog: three one-second workers cannot keep up with ten jobs arriving every second.
+Bounded queues, admission/rate limits, and retry policies are additional production
+design choices, not features automatically added by Terraform.
+
+**Automatic scaling is a separate feature.** A configured HorizontalPodAutoscaler
+can adjust a Deployment's replica count from metrics; queue-based scaling can use
+KEDA. Neither is installed/configured in this demo. Terraform would provision those
+rules, and the autoscaler would react at runtime without a new Terraform apply for
+every traffic spike. Manual Terraform applies must not repeatedly overwrite a
+replica count owned by an autoscaler; that ownership needs deliberate configuration.
+
+Interview wording: "I first identify whether HTTP handling or prediction execution
+is the bottleneck. Here I can increase worker_replicas with Terraform. Kubernetes
+creates more worker Pods, and Celery consumes more Redis jobs concurrently. I verify
+that queue wait time improves rather than assuming more replicas solve every bottleneck."
+
+References: [Kubernetes port forwarding](https://kubernetes.io/docs/reference/kubectl/generated/kubectl_port-forward/)
+and [Horizontal Pod Autoscaling](https://kubernetes.io/docs/concepts/workloads/autoscaling/horizontal-pod-autoscale/).
+
 ## 5. CI/CD and monitoring — 2 minutes
 
 Show the [GitHub Actions workflow](../.github/workflows/ci.yml): test against PostgreSQL; Terraform fmt/validate; build an image identified by commit; deploy temporary kind; train; smoke test the real async path with [scripts/smoke.py](../scripts/smoke.py); cleanup. Read [tests/test_app.py](../tests/test_app.py) for the application tests and open [Actions runs](https://github.com/jimwangllm-agentic/mini-mlops/actions) for execution results. PRs test, while main pushes also deploy. The deployment lives on the hosted runner and is deleted afterwards; it does not update the laptop automatically.
