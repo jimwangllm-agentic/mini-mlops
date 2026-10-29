@@ -8,7 +8,7 @@ cd "$(dirname "$0")/.."
 IMAGE="${IMAGE:-mini-mlops:local}"
 # Terraform reads TF_VAR_image as the input variable named image.
 export TF_VAR_image="$IMAGE"
-# kind creates the local cluster; Terraform provisions everything inside it.
+# kind creates the local cluster; Terraform provisions services and storage inside it.
 # '|' sends cluster names to grep; -qx requires an exact full-line match.
 # '!' means NOT: create the cluster only if this name is not already listed.
 if ! kind get clusters | grep -qx mini-mlops; then

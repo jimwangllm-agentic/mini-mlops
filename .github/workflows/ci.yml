@@ -89,7 +89,7 @@ jobs:
       - name: Build and deploy to temporary Kubernetes cluster
         # github.sha is the commit ID. It identifies which source built the image.
         # IMAGE=... supplies an environment variable to this one command.
-        # bash executes the script: build image, create/load kind, Terraform, training.
+        # bash executes the script: create kind, build/load the image, Terraform, training.
         run: IMAGE=mini-mlops:${{ github.sha }} bash scripts/deploy.sh
       - name: Verify real asynchronous prediction
         # '|' preserves newlines: the following are two sequential shell commands.
