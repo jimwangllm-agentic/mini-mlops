@@ -188,7 +188,55 @@ kubectl --context kind-mini-mlops -n mini-mlops logs deployment/api --tail=50
 kubectl --context kind-mini-mlops -n mini-mlops get events --sort-by=.lastTimestamp
 ```
 
+### Show Deployments, ReplicaSets, and Pods
+
+This is the command to show the Kubernetes workload chain during your demo.
+Run it in Ubuntu WSL, loading the demo environment first in each new terminal:
+
+```bash
+source /mnt/c/Users/pcc20/Documents/Codex/2026-10-28/can-x20/outputs/mini-mlops/demo-env.sh
+kubectl --context kind-mini-mlops -n mini-mlops get deployments,replicasets,pods
+```
+
+The comma-separated list asks Kubernetes to show three resource types in one
+command. This reads their status; it does not create, restart, or change anything.
+
+| Object | What it does | Worker example |
+|---|---|---|
+| Deployment | Defines the image, startup command, and desired number of Pods; manages updates | `worker` requests one worker Pod by default |
+| ReplicaSet | Maintains the requested number of matching Pods | `worker-<template-hash>` maintains that copy |
+| Pod | The unit scheduled onto a node; contains one container in this demo | `worker-<template-hash>-<unique-suffix>` contains the Celery container |
+| Container | Runs the actual application process from an image | Executes `celery -A app.tasks:celery worker ...` |
+
+The Deployment controller creates a ReplicaSet, and the ReplicaSet controller
+creates Pods. The scheduler assigns each Pod to a node. The node's kubelet asks
+its container runtime to start the containers. These Kubernetes programs are
+already running in the kind cluster; you do not manually run their internal steps.
+
+```text
+Terraform submits a Deployment definition to the Kubernetes API
+    -> Deployment controller creates a ReplicaSet
+        -> ReplicaSet controller creates a Pod
+            -> Scheduler selects a node
+                -> Kubelet/container runtime starts the Celery container
+```
+
+In your output, find the rows whose names begin with `worker`. The sample names
+above are placeholders; your real names contain generated hashes and suffixes.
+`READY 1/1` on the Deployment means one ready Pod out of one desired. A ReplicaSet
+shows desired/current/ready counts. Older ReplicaSets can remain with all counts
+at zero after a deployment update; count the active Pods to see running workers.
+The training Pod is different: a one-off Job owns it, and `Completed` is expected.
+
+The [Deployment resource in main.tf](../terraform/main.tf) describes these workloads.
+The [deployment script](../scripts/deploy.sh) creates the kind cluster first, then
+invokes Terraform. Terraform sends API requests; it does not run a separate
+`kubectl` command for each Deployment.
+
 ### Check Celery and watch a request in WSL
+
+For the objects that manage the worker, see
+[Show Deployments, ReplicaSets, and Pods](#show-deployments-replicasets-and-pods).
 
 Celery is running **inside the worker Pod**, not directly in your Ubuntu shell.
 Use `kubectl exec` to run Celery's inspection command inside that container, where
@@ -378,6 +426,47 @@ resource for each map/list entry. `metadata` includes name/namespace/labels;
 
 Terraform state records which resources belong to this configuration. It is
 local/ignored in Git for this demo. Do not delete it before normal resource cleanup.
+
+### How Terraform sends resources to Kubernetes
+
+Think of Terraform's Kubernetes provider as an HTTP API client, similar to how
+your browser is a client of FastAPI. `terraform apply` parses the `.tf` files and
+the provider translates resource settings into requests to the Kubernetes API.
+
+In [main.tf](../terraform/main.tf), this selects the cluster connection:
+
+```hcl
+provider "kubernetes" {
+  config_path    = pathexpand(var.kube_config)
+  config_context = var.kube_context
+}
+```
+
+The kubeconfig contains the API server address and authentication/TLS settings.
+On this prepared laptop, `demo-env.sh` sets `TF_VAR_kube_config` so Terraform uses
+the workspace's kubeconfig, and the context is `kind-mini-mlops`.
+
+For example, creating the worker Deployment uses Kubernetes' deployment API,
+conceptually a request to:
+
+```http
+POST /apis/apps/v1/namespaces/mini-mlops/deployments
+```
+
+The request describes the name `worker`, replica count, image, container command,
+and other resource settings. Kubernetes receives resource objects derived from
+the configuration, not the original Terraform file. On an update, the provider
+uses the appropriate update/patch requests instead of creating everything again.
+The API server records the desired state; Kubernetes' controllers and node
+components then create the ReplicaSet/Pods and run the containers.
+
+The kind cluster must already exist. `init` installs/prepares the provider;
+`apply` uses it to make API calls. It does not build Docker images or execute
+`kubectl` internally. Our separate shell script builds/loads the image and invokes
+Terraform, then uses `kubectl rollout status` to wait for ready Pods.
+
+Official references: [Kubernetes API](https://kubernetes.io/docs/concepts/overview/kubernetes-api/)
+and [Terraform Kubernetes provider](https://registry.terraform.io/providers/hashicorp/kubernetes/latest/docs/index).
 
 ## 8. GitHub Actions: testing on a separate machine
 

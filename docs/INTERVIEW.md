@@ -149,6 +149,41 @@ count, not automatically a current failure; a repeatedly increasing count needs 
 If the cluster is stopped after a reboot, use the [restart guide](LOCAL-DEMO.md#start-again-after-a-reboot).
 See [the beginner status explanation](BEGINNER-GUIDE.md#check-kubernetes-status-in-wsl) for individual command parts.
 
+### Show Deployments, ReplicaSets, and Pods
+
+Use this command during the demo after loading `demo-env.sh` in your WSL terminal:
+
+```bash
+kubectl --context kind-mini-mlops -n mini-mlops get deployments,replicasets,pods
+```
+
+For a new terminal, the complete copy-and-paste sequence is:
+
+```bash
+source /mnt/c/Users/pcc20/Documents/Codex/2026-10-28/can-x20/outputs/mini-mlops/demo-env.sh
+kubectl --context kind-mini-mlops -n mini-mlops get deployments,replicasets,pods
+```
+
+"The worker Deployment requests one running copy. Its ReplicaSet maintains that
+number of Pods. The worker Pod contains the container that runs Celery. Terraform
+sends the desired Deployment definition to Kubernetes' API; Kubernetes creates
+these supporting objects and starts the container."
+
+Use the `worker` names in the output to show the chain:
+
+```text
+Deployment: worker
+    -> ReplicaSet: worker-<template-hash>
+        -> Pod: worker-<template-hash>-<unique-suffix>
+            -> Container: runs Celery
+```
+
+The actual hashes/suffixes vary. A Deployment's `READY 1/1` means one ready Pod out
+of one desired. Older ReplicaSets with zero desired/current Pods can remain after
+updates; they do not mean extra workers are running. The completed training Pod
+is created by a Kubernetes Job, so it does not belong to this Deployment chain.
+See [the beginner explanation](BEGINNER-GUIDE.md#show-deployments-replicasets-and-pods).
+
 Then show Terraform's infrastructure preview and manual worker scaling:
 
 ```bash
