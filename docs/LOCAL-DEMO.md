@@ -76,6 +76,20 @@ From the same PowerShell folder:
 The same commands work in WSL as `bash demo.sh status`, `bash demo.sh scale 2`, etc.
 Do not run `compose` and `start` simultaneously.
 
+## Quick Kubernetes status in WSL
+
+Run these two lines to show the main components during the demo:
+
+```bash
+source /mnt/c/Users/pcc20/Documents/Codex/2026-10-28/can-x20/outputs/mini-mlops/demo-env.sh
+kubectl --context kind-mini-mlops -n mini-mlops get deployments
+```
+
+The first line loads the demo's tools and cluster configuration. The second lists
+API, worker, Redis, PostgreSQL, MLflow, Prometheus, and Grafana Deployments.
+Each should show `READY 1/1` by default: one ready Pod out of one requested.
+If you scale the worker, its count should match, for example `READY 3/3`.
+
 ## Monitor a prediction in WSL
 
 Start the Kubernetes demo using the reboot steps above. Open three **Ubuntu WSL**
@@ -168,13 +182,8 @@ then type `\q` to exit psql.
    [compose.yaml](../compose.yaml), and [ci.yml](../.github/workflows/ci.yml).
 4. Compare the [cloud equivalents](../docs/CLOUD-ALTERNATIVES.md).
 
-For manual Kubernetes/Terraform commands from the repository README, first run this
-in **Ubuntu WSL** so your shell selects this demo's tools and kubeconfig:
-
-```bash
-source /mnt/c/Users/pcc20/Documents/Codex/2026-10-28/can-x20/outputs/mini-mlops/demo-env.sh
-kubectl --context kind-mini-mlops -n mini-mlops get pods
-```
+For manual Kubernetes/Terraform commands from the repository README, load
+`demo-env.sh` in **Ubuntu WSL** as shown in [Quick Kubernetes status](#quick-kubernetes-status-in-wsl).
 
 Tools and kubeconfig are scoped to this workspace under `../../work/` relative to the repository; the helper
 selects the pinned kubectl compatible with this cluster. It does not replace your
