@@ -136,6 +136,231 @@ Other endings you will see after that same prefix:
 Port forwarding runs continuously. In the README's manual setup, leave that
 terminal open. The laptop-specific `demo.sh` helper can run these tunnels in the background.
 
+### Check Kubernetes status in WSL
+
+On your prepared laptop, open **Ubuntu WSL** and run:
+
+```bash
+# Load the compatible kubectl, kubeconfig, and project directory for this laptop.
+source /mnt/c/Users/pcc20/Documents/Codex/2026-10-28/can-x20/outputs/mini-mlops/demo-env.sh
+
+# Is Kubernetes' management API reachable?
+kubectl --context kind-mini-mlops cluster-info
+
+# Is its node ready to run workloads?
+kubectl --context kind-mini-mlops get nodes
+
+# Are the requested copies of each service available?
+kubectl --context kind-mini-mlops -n mini-mlops get deployments
+
+# What is each individual Pod doing?
+kubectl --context kind-mini-mlops -n mini-mlops get pods
+```
+
+`source` applies the settings from [demo-env.sh](../demo-env.sh) to your current
+terminal. It also changes into the repository folder. Run it again in each new
+terminal. It does not start the services. If they are stopped, follow
+[Start again after a reboot](LOCAL-DEMO.md#start-again-after-a-reboot).
+The absolute path above is specific to your prepared laptop; fresh installations
+should follow the [README setup](../README.md) and their own kubeconfig/tool paths.
+
+| Output | How to read it |
+|---|---|
+| `cluster-info` prints the control-plane address | Kubernetes answered the command; an address alone does not prove every app works |
+| Node `STATUS Ready` | The node is ready to run workloads |
+| Deployment `READY 1/1` | One ready Pod out of one desired; a scaled worker may show `2/2` |
+| Service Pod `STATUS Running`, `READY 1/1` | Its container is running and considered ready; use application checks too |
+| Training Pod `Completed`, `READY 0/1` | Normal: the one-off training process finished and is no longer running |
+| `RESTARTS` | Previous restarts, including startup/reboot history; watch whether the count keeps increasing |
+| `CrashLoopBackOff` | A container keeps exiting and Kubernetes is delaying its next retry; inspect its logs |
+| `Pending` | The Pod has not been scheduled or its prerequisites are not ready yet |
+
+`--context kind-mini-mlops` selects our cluster. `-n mini-mlops` selects this
+project's namespace. Nodes belong to the whole cluster, so `get nodes` needs no `-n`.
+The API and MLflow have HTTP readiness checks; the worker's Pod readiness alone
+does not prove Celery is receiving tasks. Check Celery itself below.
+
+If a Pod fails, inspect its logs and recent Kubernetes events:
+
+```bash
+# Replace deployment/api with deployment/worker to check the worker's logs.
+kubectl --context kind-mini-mlops -n mini-mlops logs deployment/api --tail=50
+kubectl --context kind-mini-mlops -n mini-mlops get events --sort-by=.lastTimestamp
+```
+
+### Check Celery and watch a request in WSL
+
+Celery is running **inside the worker Pod**, not directly in your Ubuntu shell.
+Use `kubectl exec` to run Celery's inspection command inside that container, where
+the application code, Python dependencies, and Redis configuration already exist.
+
+First run the `source` command above in your WSL terminal, then:
+
+```bash
+# Find the worker Pod: expect Running with READY 1/1.
+kubectl --context kind-mini-mlops -n mini-mlops get pods -l app=worker
+
+# Ask responding Celery workers to send a reply through Redis.
+kubectl --context kind-mini-mlops -n mini-mlops exec deployment/worker -- celery -A app.tasks:celery inspect ping --timeout=10
+```
+
+Expected reply, with your actual worker Pod name:
+
+```text
+-> celery@worker-EXAMPLE: OK
+        pong
+```
+
+| Part of the inspection command | Meaning |
+|---|---|
+| `exec deployment/worker` | Execute a command inside a Pod selected from the worker Deployment |
+| `--` | End kubectl's arguments; the remaining words form the command inside the container |
+| `celery` | Run Celery's command-line tool inside that container |
+| `-A app.tasks:celery` | Load the Celery app object named `celery` from [app/tasks.py](../app/tasks.py), including its Redis connection settings |
+| `inspect ping` | Ask workers to prove they respond to control messages |
+| `--timeout=10` | Allow up to ten seconds to collect worker replies |
+
+A `pong` confirms worker/broker responsiveness, not a successful ML prediction.
+The next exercise checks that a submitted request actually reaches the task code.
+
+**Terminal 1: watch the worker.**
+
+```bash
+# Show the last 20 lines, then keep printing new lines with -f (follow).
+kubectl --context kind-mini-mlops -n mini-mlops logs deployment/worker --tail=20 -f
+```
+
+In [Swagger](http://localhost:8000/docs), submit **POST /jobs** with:
+
+```json
+{"features": [5.1, 3.5, 1.4, 0.2]}
+```
+
+Check the POST response first: **202** means the job was accepted and includes an
+ID. **422** means input validation failed, so Celery receives no message. Use the
+valid example above; four zeros are rejected because measurements must be positive.
+
+Copy the returned job ID and look for the same ID in the terminal:
+
+```text
+Task predict[YOUR-JOB-ID] received
+Task predict[YOUR-JOB-ID] succeeded in ...s: None
+```
+
+- `received`: Celery consumed the task message from Redis.
+- `succeeded`: your Python task finished without raising an error.
+- `None`: this task returns no value to Celery; it saves the prediction in PostgreSQL.
+- The UUID connects the FastAPI response, Celery logs, and PostgreSQL job row.
+
+Press **Ctrl+C** to stop following logs. This ends your log-viewing command and
+does not stop the worker or the application. After scaling to multiple workers,
+watch all current worker Pods with this label selector instead:
+
+```bash
+# -l selects worker Pods; --prefix=true includes the Pod/container on each line.
+kubectl --context kind-mini-mlops -n mini-mlops logs -l app=worker --prefix=true --tail=20 -f
+```
+
+Restart the log command after scaling so it selects the new set of worker Pods.
+
+**Terminal 2: ask Celery what it is doing right now.** Load `demo-env.sh` in this
+new terminal, then run:
+
+```bash
+kubectl --context kind-mini-mlops -n mini-mlops exec deployment/worker -- celery -A app.tasks:celery inspect active --timeout=10
+```
+
+The CLI displays `- empty -` when no task was executing when the worker answered
+(an empty list `[]` in structured output). Iris predictions finish
+quickly, so an empty list after submission is often normal: use logs to see work
+that already finished. `inspect active` is a current snapshot, not a task history.
+
+For the durable status/result, open **GET /jobs/{job_id}** in Swagger. This project
+disables Celery's result backend and stores application results in PostgreSQL, so
+Celery's result lookup is not the way to retrieve completed predictions here.
+
+For a complete prediction check from WSL without the browser:
+
+```bash
+# Run from the repository folder selected by demo-env.sh.
+bash demo.sh smoke
+```
+
+### Inspect Redis and PostgreSQL in WSL
+
+Run the `source .../demo-env.sh` command above in each new WSL terminal first.
+Redis contains waiting task messages; PostgreSQL contains the durable input,
+status, and result. They answer different questions.
+
+**Redis: how much work is waiting?**
+
+```bash
+# LLEN means list length; celery is this demo's default queue name.
+kubectl --context kind-mini-mlops -n mini-mlops exec deployment/redis -- redis-cli LLEN celery
+
+# LINDEX reads one list item; 0 selects the newest queued message in this setup.
+kubectl --context kind-mini-mlops -n mini-mlops exec deployment/redis -- redis-cli LINDEX celery 0
+```
+
+Celery writes new messages to the front of the Redis list and consumes from the
+other end. A fast worker can consume a message before you inspect the list.
+`LLEN` can therefore return `0`, and `LINDEX` can return nothing/nil, even after a
+successful prediction. The message may also be executing already. Redis does not
+keep completed task messages as a history table in this project.
+
+**Redis: watch a new message get enqueued.** Start this before clicking Execute in Swagger:
+
+```bash
+kubectl --context kind-mini-mlops -n mini-mlops exec deployment/redis -- redis-cli MONITOR | grep --line-buffered -i '"LPUSH" "celery"'
+```
+
+| Part | Meaning |
+|---|---|
+| `exec deployment/redis -- redis-cli` | Run Redis's CLI inside its container |
+| `MONITOR` | Stream Redis commands as they happen, not past commands |
+| `\|` | Pass that output to the next program in your WSL shell |
+| `grep --line-buffered` | Print matching lines immediately rather than buffering them |
+| `-i '"LPUSH" "celery"'` | Match writes to the demo queue, regardless of letter case |
+
+The output includes the queued task's message envelope, whose headers contain the
+job UUID. Its body is encoded, so do not expect the prediction result or readable
+measurements there. `LPUSH` confirms enqueueing, not worker completion. Watch
+Celery's `received`/`succeeded` logs and query PostgreSQL for those later stages.
+MONITOR streams all Redis commands before filtering; use this live debugging view
+briefly and stop with **Ctrl+C**. It does not stop Redis or Celery.
+
+**PostgreSQL: show the newest submitted job and its prediction.**
+
+```bash
+kubectl --context kind-mini-mlops -n mini-mlops exec deployment/postgres -- psql -U demo -d demo -x -c "SELECT id, status, features, result, error, created_at FROM prediction_jobs ORDER BY created_at DESC LIMIT 1;"
+```
+
+| Part | Meaning |
+|---|---|
+| `psql` | PostgreSQL's command-line client, running inside the database container |
+| `-U demo` | Connect as the database user named demo |
+| `-d demo` | Connect to the demo database |
+| `-x` | Show each field on its own line, making JSON results easier to read |
+| `-c "..."` | Execute the quoted SQL query |
+| `SELECT ... FROM prediction_jobs` | Read the chosen fields from the job table |
+| `ORDER BY created_at DESC` | Sort newest submissions first |
+| `LIMIT 1` | Return only the first row |
+
+For a completed prediction, expect `status = succeeded` and a `result` containing
+the species and model version. For queued/running jobs, `result` may still be empty.
+This query finds the latest submission; it does not sort by completion time.
+Change `LIMIT 1` to `LIMIT 5` to see recent submissions.
+
+To refresh that query every two seconds, use Ubuntu's `watch` command:
+
+```bash
+watch -n 2 -x kubectl --context kind-mini-mlops -n mini-mlops exec deployment/postgres -- psql -U demo -d demo -x -c "SELECT id, status, result, error, created_at FROM prediction_jobs ORDER BY created_at DESC LIMIT 1;"
+```
+
+The first `-n 2` sets the watch interval. Watch's first `-x` preserves command
+arguments, including the SQL string; psql's later `-x` formats the row vertically.
+Press Ctrl+C to stop refreshing. This reads data; it does not update the job.
+
 ## 7. Terraform: describe resources, then create them
 
 | Command | Meaning |
@@ -175,6 +400,49 @@ starts a temporary kind cluster on the GitHub runner and tests a real prediction
 
 The runner is discarded afterward. A green workflow proves the tested deployment
 worked there; your laptop's demo is a separate deployment with its own data.
+
+### Does every commit rebuild and redeploy?
+
+In this project, **every push to main** runs the workflow, even a documentation-only
+change. The [workflow file](../.github/workflows/ci.yml) has no path filter:
+
+```yaml
+on:
+  push:
+    branches: [main]
+```
+
+The deploy job waits for tests with `needs: test`, then executes:
+
+```yaml
+run: IMAGE=mini-mlops:${{ github.sha }} bash scripts/deploy.sh
+```
+
+`github.sha` is the commit ID. GitHub substitutes it into the image tag so the
+image identifies the exact source revision. The [deployment script](../scripts/deploy.sh)
+runs these commands on the GitHub runner:
+
+```bash
+# Create a new local Kubernetes cluster on the runner if absent.
+kind create cluster --name mini-mlops --image kindest/node:v1.32.2 --wait 120s
+
+# Build the Python application image and put it into that cluster's runtime.
+docker build -t "$IMAGE" .
+kind load docker-image "$IMAGE" --name mini-mlops
+
+# Prepare Terraform and create the Kubernetes resources.
+terraform -chdir=terraform init -input=false
+terraform -chdir=terraform apply -auto-approve -input=false
+```
+
+It then trains/registers a model using a Kubernetes Job. The workflow checks a
+real prediction with `python scripts/smoke.py` and removes the temporary cluster
+with `kind delete cluster --name mini-mlops`.
+
+Each deployment run uses a fresh runner, cluster, and local Terraform state, so
+the resources are created again. This is not a persistent production CD target.
+It neither updates nor deletes the laptop deployment. The image is not pushed
+to a registry; it is used on the runner and disappears with that environment.
 
 Continue with [the runnable README](../README.md) and then the
 [interview walkthrough](INTERVIEW.md). Start by demonstrating one prediction;

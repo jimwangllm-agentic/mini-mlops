@@ -2,7 +2,7 @@ import pytest
 from fastapi.testclient import TestClient
 
 from app.db import Job, Session
-from app.main import app
+from app.main import PredictionInput, app
 from app.tasks import predict
 
 
@@ -24,6 +24,16 @@ def test_health_and_unknown_job(client):
     assert client.get("/health").status_code == 200
     assert client.get("/jobs/00000000-0000-0000-0000-000000000001").status_code == 404
     assert client.get("/jobs/not-a-uuid").status_code == 422
+
+
+def test_swagger_example_is_valid_and_features_are_still_required(client):
+    """Keep Swagger's suggested input usable without making input optional."""
+    schema = client.get("/openapi.json").json()["components"]["schemas"]["PredictionInput"]
+    example = schema["example"]
+    assert example == {"features": [5.1, 3.5, 1.4, 0.2]}
+    assert PredictionInput.model_validate(example).features == example["features"]
+    assert "features" in schema["required"]
+    assert client.post("/jobs", json={}).status_code == 422
 
 
 def test_real_model_job_lifecycle(client, monkeypatch, trained_model):

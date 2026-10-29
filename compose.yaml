@@ -135,7 +135,7 @@ services:
     image: grafana/grafana:11.6.1
     environment:
       GF_SECURITY_ADMIN_USER: admin # Browser login username.
-      GF_SECURITY_ADMIN_PASSWORD: demo-admin # Browser login password for this demo.
+      GF_SECURITY_ADMIN_PASSWORD: admin # Browser login password for this demo.
     volumes:
       # Automatically configure the connection to Prometheus.
       - ./monitoring/datasource.yml:/etc/grafana/provisioning/datasources/default.yml:ro

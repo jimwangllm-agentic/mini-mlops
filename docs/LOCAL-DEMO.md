@@ -19,7 +19,7 @@ Pods and back to one was verified; one worker is left running to keep the demo s
 |---|---|---|
 | FastAPI / Swagger | [localhost:8000/docs](http://localhost:8000/docs) | POST a prediction, copy the returned ID, GET its result |
 | MLflow | [localhost:5000](http://localhost:5000) | Experiment `iris-demo`, accuracy, registered model `iris`, alias `champion` |
-| Grafana | [Iris dashboard](http://localhost:3000/d/iris-demo) | Login `admin` / `demo-admin`; request rate, latency, saved job counts |
+| Grafana | [Iris dashboard](http://localhost:3000/d/iris-demo) | Login `admin` / `admin`; request rate, latency, saved job counts |
 | Prometheus | [Targets](http://localhost:9090/targets) | The API scrape target is UP |
 
 Example input for **POST /jobs**:

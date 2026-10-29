@@ -87,7 +87,7 @@ locals {
     }
     grafana = {
       image   = "grafana/grafana:11.6.1", port = 3000, command = null
-      env     = { GF_SECURITY_ADMIN_USER = "admin", GF_SECURITY_ADMIN_PASSWORD = "demo-admin" }
+      env     = { GF_SECURITY_ADMIN_USER = "admin", GF_SECURITY_ADMIN_PASSWORD = "admin" }
       storage = null, memory = "256Mi", replicas = 1
     }
   }

@@ -44,9 +44,17 @@ class PredictionInput(BaseModel):
     FastAPI returns HTTP 422 if the body does not match this schema.
     """
 
-    # Reject unexpected fields and require exactly four numeric measurements.
-    model_config = ConfigDict(extra="forbid")
-    features: list[float] = Field(min_length=4, max_length=4)
+    # Swagger displays a valid flower example instead of generating four zeros.
+    # This is documentation, not a default: requests must still provide features.
+    model_config = ConfigDict(
+        extra="forbid",
+        json_schema_extra={"example": {"features": [5.1, 3.5, 1.4, 0.2]}},
+    )
+    features: list[float] = Field(
+        min_length=4,
+        max_length=4,
+        description="Sepal length, sepal width, petal length, petal width, in centimeters.",
+    )
 
     @field_validator("features")
     @classmethod

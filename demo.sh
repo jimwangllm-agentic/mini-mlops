@@ -9,29 +9,35 @@ export KUBECONFIG="$WORK/kubeconfig"
 export TF_VAR_kube_config="$KUBECONFIG"
 
 forward_ports() {
-  # nohup keeps forwarding alive after this command exits. Logs stay in work/.
+  # Check HTTP readiness, not just an open TCP port: a tunnel to an old Pod can
+  # briefly keep listening during a rollout, then exit on its next request.
+  # Retry so a closed tunnel is recreated before reporting the demo ready.
   for item in api:8000 mlflow:5000 prometheus:9090 grafana:3000; do
     service=${item%:*}
     port=${item#*:}
-    if python3 -c 'import socket,sys; s=socket.socket(); s.settimeout(1); sys.exit(s.connect_ex(("127.0.0.1",int(sys.argv[1]))))' "$port"; then
-      echo "Port $port already has a listener; keeping it."
-    else
-      nohup kubectl --context kind-mini-mlops -n mini-mlops port-forward "service/$service" "$port:$port" \
-        > "$WORK/forward-$service.log" 2>&1 < /dev/null &
-      forward_pid=$!
-      disown "$forward_pid"
-      # Wait for this child to bind its port before the launching WSL shell exits.
-      # This also catches port-forward errors instead of reporting false readiness.
-      for attempt in {1..30}; do
-        if python3 -c 'import socket,sys; s=socket.socket(); s.settimeout(1); sys.exit(s.connect_ex(("127.0.0.1",int(sys.argv[1]))))' "$port"; then
-          break
-        fi
-        if ! kill -0 "$forward_pid" 2>/dev/null; then
-          cat "$WORK/forward-$service.log"
-          return 1
-        fi
-        sleep 0.25
-      done
+    case "$service" in
+      api|mlflow) health_path=/health ;;
+      prometheus) health_path=/-/ready ;;
+      grafana) health_path=/api/health ;;
+    esac
+    service_ready=false
+    for attempt in {1..30}; do
+      if ! python3 -c 'import socket,sys; s=socket.socket(); s.settimeout(1); sys.exit(s.connect_ex(("127.0.0.1",int(sys.argv[1]))))' "$port"; then
+        # nohup/disown keep this tunnel alive after the launching shell exits.
+        nohup kubectl --context kind-mini-mlops -n mini-mlops port-forward "service/$service" "$port:$port" \
+          > "$WORK/forward-$service.log" 2>&1 < /dev/null &
+        disown "$!"
+      fi
+      if python3 -c 'import sys,urllib.request; urllib.request.urlopen(sys.argv[1],timeout=2).close()' "http://127.0.0.1:$port$health_path" 2>/dev/null; then
+        service_ready=true
+        echo "$service is reachable on localhost:$port"
+        break
+      fi
+      sleep 1
+    done
+    if [[ "$service_ready" != true ]]; then
+      echo "$service is not reachable. Check $WORK/forward-$service.log"
+      return 1
     fi
   done
 }

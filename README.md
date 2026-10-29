@@ -140,7 +140,7 @@ Invoke-RestMethod "http://localhost:8000/jobs/$($job.id)" | ConvertTo-Json -Dept
 | Redis | `docker compose exec redis redis-cli PING` | PONG |
 | MLflow | [MLflow](http://localhost:5000) | Experiment `iris-demo`; accuracy; Models → `iris` → version and alias |
 | Prometheus | [Targets](http://localhost:9090/targets) | `api` target UP |
-| Grafana | [Iris dashboard](http://localhost:3000/d/iris-demo) | Login `admin` / `demo-admin`; job counts and request metrics |
+| Grafana | [Iris dashboard](http://localhost:3000/d/iris-demo) | Login `admin` / `admin`; job counts and request metrics |
 
 Run the smoke script several times to generate traffic. Allow 10–15 seconds for scraping and about a minute for rate/latency charts. MLflow's test accuracy measures model quality; Prometheus's latency measures application performance. They answer different questions.
 
@@ -267,7 +267,7 @@ Destroy Terraform resources while the cluster still exists. Close port-forward t
 | `train` failed / API not starting | `docker compose logs mlflow train`; check free RAM/disk; first build needs internet |
 | A job stays queued | `docker compose logs worker`; confirm worker is running |
 | Failed job with registry/model error | Confirm training succeeded and `iris` has a `champion` alias; retrain then submit a new job |
-| Empty Grafana charts | Run smoke tests; check Prometheus Targets; wait one minute; login admin/demo-admin |
+| Empty Grafana charts | Run smoke tests; check Prometheus Targets; wait one minute; login admin/admin |
 | Port already in use | Stop Compose or the existing port-forward before starting the other deployment |
 | kind pods `ImagePullBackOff` | `kind load docker-image mini-mlops:local --name mini-mlops`; confirm tag matches Terraform |
 | API initially CrashLoopBackOff | PostgreSQL may still be starting; wait for rollout; check logs if it persists |
