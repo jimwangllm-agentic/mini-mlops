@@ -334,6 +334,53 @@ that queue wait time improves rather than assuming more replicas solve every bot
 References: [Kubernetes port forwarding](https://kubernetes.io/docs/reference/kubectl/generated/kubectl_port-forward/)
 and [Horizontal Pod Autoscaling](https://kubernetes.io/docs/concepts/workloads/autoscaling/horizontal-pod-autoscale/).
 
+### Why use Terraform if Kubernetes already has these commands?
+
+**You do not need Terraform to run Kubernetes.** Kubernetes already supports
+creating Deployments, changing replicas, and managing containers. This project
+includes Terraform because it is one of the technologies we want to demonstrate.
+
+These are two alternative ways to request three worker Pods. Run them from the
+prepared WSL project environment described above:
+
+| Method | Command | What happens |
+|---|---|---|
+| Kubernetes directly | `kubectl --context kind-mini-mlops -n mini-mlops scale deployment/worker --replicas=3` | Immediately updates the worker Deployment's desired replica count to three |
+| Terraform | `terraform -chdir=terraform apply -var='worker_replicas=3'` | Reads the configuration, previews changes, and updates the worker Deployment through the Kubernetes API after approval |
+
+**Kubernetes does the actual work in both cases:** creating the extra Pods,
+starting their containers, and replacing failed Pods. Terraform does not run the
+containers itself. It also does not need to run the `kubectl scale` command;
+its Kubernetes provider talks to the Kubernetes API directly.
+
+Terraform lets you **describe and manage the intended setup in files**.
+Our [main.tf](../terraform/main.tf) describes Deployments, Services, storage,
+and other resources together. Terraform compares that configuration with the
+existing resources, previews the differences, and applies the requested changes.
+The files can be reviewed and versioned in Git.
+
+Here is why changing the same setting through both tools can be confusing:
+
+1. The default in `main.tf` requests **one worker**.
+2. You run `kubectl scale ... --replicas=3`. Kubernetes now maintains **three workers**.
+3. You later run `terraform -chdir=terraform apply` with the default variable value.
+   Terraform detects the difference and, after approval, requests **one worker again**.
+
+Terraform does not continuously undo your manual changes in the background.
+The change back happens when you apply configuration that requests one worker.
+Keep the intended replica count consistent in your Terraform variable settings
+when you want Terraform to manage it.
+
+For this small demo, Kubernetes YAML configuration files plus `kubectl apply`
+would also be sufficient. Terraform is an optional way to manage those resources.
+In a larger cloud project, Terraform can also provision the network, Kubernetes
+cluster, and managed databases. Our current Terraform configuration manages
+resources **inside an existing kind cluster**; it does not provision cloud infrastructure.
+
+Interview wording: "Kubernetes runs and maintains our containers. Terraform
+defines and applies our intended infrastructure configuration. Terraform is
+optional for Kubernetes, but helps manage that configuration consistently."
+
 ## 5. CI/CD and monitoring — 2 minutes
 
 Show the [GitHub Actions workflow](../.github/workflows/ci.yml): test against PostgreSQL; Terraform fmt/validate; build an image identified by commit; deploy temporary kind; train; smoke test the real async path with [scripts/smoke.py](../scripts/smoke.py); cleanup. Read [tests/test_app.py](../tests/test_app.py) for the application tests and open [Actions runs](https://github.com/jimwangllm-agentic/mini-mlops/actions) for execution results. PRs test, while main pushes also deploy. The deployment lives on the hosted runner and is deleted afterwards; it does not update the laptop automatically.
