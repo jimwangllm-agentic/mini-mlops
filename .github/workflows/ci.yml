@@ -1,0 +1,75 @@
+name: test-and-deploy
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+permissions:
+  contents: read
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:16.8-alpine
+        env:
+          POSTGRES_USER: demo
+          POSTGRES_PASSWORD: demo
+          POSTGRES_DB: demo_test
+        ports: ["5432:5432"]
+        options: >-
+          --health-cmd "pg_isready -U demo -d demo_test"
+          --health-interval 5s --health-timeout 5s --health-retries 20
+    env:
+      TEST_DATABASE_URL: postgresql+psycopg2://demo:demo@localhost:5432/demo_test
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+          cache: pip
+      - run: pip install -r requirements.txt
+      - run: python -m pytest -q
+      - uses: hashicorp/setup-terraform@v3
+        with:
+          terraform_version: 1.11.4
+      - run: terraform -chdir=terraform fmt -check
+      - run: terraform -chdir=terraform init -backend=false
+      - run: terraform -chdir=terraform validate
+  deploy:
+    if: github.event_name != 'pull_request'
+    needs: test
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - uses: hashicorp/setup-terraform@v3
+        with:
+          terraform_version: 1.11.4
+      - uses: helm/kind-action@v1.12.0
+        with:
+          install_only: true
+          version: v0.27.0
+          kubectl_version: v1.32.2
+      - name: Build and deploy to temporary Kubernetes cluster
+        run: IMAGE=mini-mlops:${{ github.sha }} bash scripts/deploy.sh
+      - name: Verify real asynchronous prediction
+        run: |
+          kubectl --context kind-mini-mlops -n mini-mlops port-forward service/api 8000:8000 > /tmp/port-forward.log 2>&1 &
+          python scripts/smoke.py
+      - name: Diagnostics
+        if: failure()
+        run: |
+          kubectl --context kind-mini-mlops -n mini-mlops get pods,jobs,pvc
+          kubectl --context kind-mini-mlops -n mini-mlops logs -l app=api --tail=100
+          kubectl --context kind-mini-mlops -n mini-mlops logs -l app=worker --tail=100
+          kubectl --context kind-mini-mlops -n mini-mlops get events --sort-by=.lastTimestamp
+      - name: Cleanup ephemeral cluster
+        if: always()
+        run: kind delete cluster --name mini-mlops

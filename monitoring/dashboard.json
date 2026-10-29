@@ -1,0 +1,14 @@
+{
+  "uid": "iris-demo",
+  "title": "Iris deployment",
+  "schemaVersion": 40,
+  "version": 1,
+  "refresh": "5s",
+  "time": {"from": "now-15m", "to": "now"},
+  "panels": [
+    {"id": 1, "title": "API reachable (1 = up)", "type": "stat", "gridPos": {"x": 0, "y": 0, "w": 8, "h": 6}, "datasource": {"uid": "prometheus", "type": "prometheus"}, "targets": [{"refId": "A", "expr": "up{job=\"api\"}"}]},
+    {"id": 2, "title": "Persisted jobs by status", "type": "timeseries", "gridPos": {"x": 8, "y": 0, "w": 16, "h": 6}, "datasource": {"uid": "prometheus", "type": "prometheus"}, "targets": [{"refId": "A", "expr": "max by(status) (prediction_jobs)", "legendFormat": "{{status}}"}]},
+    {"id": 3, "title": "API requests / second", "type": "timeseries", "gridPos": {"x": 0, "y": 6, "w": 12, "h": 7}, "datasource": {"uid": "prometheus", "type": "prometheus"}, "targets": [{"refId": "A", "expr": "sum by(path) (rate(api_requests_total[1m]))", "legendFormat": "{{path}}"}]},
+    {"id": 4, "title": "API latency p95 (seconds)", "type": "timeseries", "gridPos": {"x": 12, "y": 6, "w": 12, "h": 7}, "datasource": {"uid": "prometheus", "type": "prometheus"}, "targets": [{"refId": "A", "expr": "histogram_quantile(0.95, sum by(le) (rate(api_request_seconds_bucket[1m])))"}]}
+  ]
+}

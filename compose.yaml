@@ -1,0 +1,81 @@
+name: mini-mlops
+x-app: &app
+  image: mini-mlops:local
+  build: .
+  environment: &env
+    DATABASE_URL: postgresql+psycopg2://demo:demo@postgres:5432/demo
+    REDIS_URL: redis://redis:6379/0
+    MLFLOW_TRACKING_URI: http://mlflow:5000
+services:
+  postgres:
+    image: postgres:16.8-alpine
+    environment:
+      POSTGRES_USER: demo
+      POSTGRES_PASSWORD: demo
+      POSTGRES_DB: demo
+    volumes: ["postgres:/var/lib/postgresql/data"]
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U demo -d demo"]
+      interval: 3s
+      timeout: 3s
+      retries: 30
+  redis:
+    image: redis:7.4.2-alpine
+    command: ["redis-server", "--appendonly", "yes"]
+    volumes: ["redis:/data"]
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 3s
+      timeout: 3s
+      retries: 30
+  mlflow:
+    <<: *app
+    command: ["mlflow", "server", "--host", "0.0.0.0", "--port", "5000", "--backend-store-uri", "sqlite:////mlflow/mlflow.db", "--serve-artifacts", "--artifacts-destination", "/mlflow/artifacts", "--workers", "1"]
+    ports: ["127.0.0.1:5000:5000"]
+    volumes: ["mlflow:/mlflow"]
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:5000/health')"]
+      interval: 5s
+      timeout: 5s
+      retries: 40
+      start_period: 20s
+  train:
+    <<: *app
+    command: ["python", "-m", "app.train"]
+    depends_on:
+      mlflow: {condition: service_healthy}
+  api:
+    <<: *app
+    ports: ["127.0.0.1:8000:8000"]
+    depends_on:
+      postgres: {condition: service_healthy}
+      redis: {condition: service_healthy}
+      train: {condition: service_completed_successfully}
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8000/health')"]
+      interval: 5s
+      timeout: 5s
+      retries: 30
+  worker:
+    <<: *app
+    command: ["celery", "-A", "app.tasks:celery", "worker", "--loglevel=info", "--concurrency=1"]
+    depends_on:
+      api: {condition: service_healthy}
+  prometheus:
+    image: prom/prometheus:v3.3.0
+    volumes: ["./monitoring/prometheus.yml:/etc/prometheus/prometheus.yml:ro"]
+    ports: ["127.0.0.1:9090:9090"]
+  grafana:
+    image: grafana/grafana:11.6.1
+    environment:
+      GF_SECURITY_ADMIN_USER: admin
+      GF_SECURITY_ADMIN_PASSWORD: demo-admin
+    volumes:
+      - ./monitoring/datasource.yml:/etc/grafana/provisioning/datasources/default.yml:ro
+      - ./monitoring/dashboard-provider.yml:/etc/grafana/provisioning/dashboards/default.yml:ro
+      - ./monitoring/dashboard.json:/var/lib/grafana/dashboards/iris.json:ro
+    ports: ["127.0.0.1:3000:3000"]
+volumes:
+  postgres:
+  redis:
+  mlflow:
