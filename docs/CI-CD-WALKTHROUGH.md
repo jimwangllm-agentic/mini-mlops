@@ -1,4 +1,4 @@
-# How this project's CI/CD runs
+# How this project's CI/CD and monitoring run
 
 CI means continuous integration: check the code and configuration. CD means
 continuous delivery/deployment: build and deploy the application, then verify it.
@@ -24,6 +24,9 @@ flowchart TD
     J --> K["Docker: build application image<br/>kind: copy image into cluster"]
     K --> L["Terraform: apply main.tf<br/>Kubernetes creates resources and starts Pods"]
     L --> M["kubectl: wait for Deployments"]
+    L --> R["Monitoring also starts<br/>Prometheus and Grafana Pods + configuration"]
+    R --> S["Prometheus scrapes API /metrics every 5 seconds"]
+    S --> T["Grafana queries Prometheus<br/>Displays provisioned dashboard"]
     M --> N["Kubernetes training Job<br/>Train model and register it in MLflow"]
     N --> O["Smoke test: submit prediction<br/>Verify saved result and metrics"]
     O --> P["Cleanup: delete temporary cluster"]
@@ -219,8 +222,128 @@ Finally, [cleanup](../.github/workflows/ci.yml#L114-L117) is attempted on succes
 This deletes the temporary cluster on the GitHub runner, including that run's
 database/model data. It does not delete or update your laptop's demo cluster.
 
+## 7. Monitoring: API metrics, Prometheus, and Grafana
+
+Monitoring runs alongside the application after deployment. It is not a separate
+GitHub Actions job. Terraform creates the Prometheus and Grafana Deployments and
+Services, plus ConfigMaps holding their configuration. The readiness loop above
+includes both Deployments. Read the [monitoring file definitions and mount paths](../terraform/main.tf#L165-L183)
+and [ConfigMap resource](../terraform/main.tf#L187).
+
+```mermaid
+flowchart LR
+    U["User / smoke test"] -->|"HTTP requests"| A["FastAPI middleware<br/>Counts requests and response time"]
+    W["Celery worker"] -->|"Saves job status and result"| D[("PostgreSQL")]
+    A -->|"Exposes process metrics"| M["API GET /metrics"]
+    M -->|"Reads persisted job counts"| D
+    P["Prometheus"] -->|"Pulls GET /metrics every 5 seconds"| M
+    G["Grafana dashboard"] -->|"Queries stored time series"| P
+    V["You in the browser"] -->|"Opens dashboard"| G
+```
+
+The arrows above represent requests or writes: Prometheus requests metrics from
+the API, and Grafana requests data from Prometheus. The API does not push its
+metrics to Grafana, and Grafana does not query PostgreSQL in this demo.
+
+### API: record and expose measurements
+
+Read the [HTTP middleware in main.py](../app/main.py#L72-L93). For each request,
+the middleware increments a counter and records elapsed response time:
+
+```python
+REQUESTS.labels(request.method, path, str(status)).inc()
+LATENCY.labels(path).observe(monotonic() - start)
+```
+
+The [GET /metrics endpoint](../app/main.py#L150-L164) exposes those measurements
+in Prometheus text format. It also queries PostgreSQL for counts grouped by
+job status: `queued`, `running`, `succeeded`, and `failed`. This is how worker
+updates appear in the monitoring data even though the worker runs separately.
+
+Request counters and timings belong to the current API process and reset when
+it restarts. Job counts come from persisted PostgreSQL rows and survive an API
+restart. API response latency measures the HTTP response, not the complete time
+from submission through background prediction completion.
+
+### Prometheus: collect and store measurements
+
+The complete [monitoring/prometheus.yml](../monitoring/prometheus.yml) is:
+
+```yaml
+global:
+  scrape_interval: 5s
+scrape_configs:
+  - job_name: api
+    static_configs:
+      - targets: [api:8000]
+```
+
+Every five seconds, Prometheus requests `http://api:8000/metrics` inside the
+cluster and stores the returned samples as time series. `/metrics` is its
+default scrape path. `api` resolves to our Kubernetes API Service, not the
+Kubernetes management API. Prometheus generates `up{job="api"}` to indicate
+whether the scrape succeeded.
+
+### Grafana: query Prometheus and draw the dashboard
+
+The [datasource configuration](../monitoring/datasource.yml) connects Grafana to
+Prometheus using the internal Service address:
+
+```yaml
+datasources:
+  - name: Prometheus
+    uid: prometheus
+    type: prometheus
+    access: proxy
+    url: http://prometheus:9090
+    isDefault: true
+```
+
+The [dashboard provider](../monitoring/dashboard-provider.yml) loads the saved
+[dashboard.json](../monitoring/dashboard.json), whose refresh interval is five
+seconds. The dashboard uses these actual PromQL queries:
+
+| Panel | Query | Meaning |
+|---|---|---|
+| API reachable | `up{job="api"}` | `1` means Prometheus successfully scraped the API; `0` means the scrape failed |
+| Persisted jobs by status | `max by(status) (prediction_jobs)` | Saved database job counts grouped by status |
+| API requests / second | `sum by(path) (rate(api_requests_total[1m]))` | Request rate by route over a one-minute window |
+| API latency p95 | `histogram_quantile(0.95, sum by(le) (rate(api_request_seconds_bucket[1m])))` | Estimated 95th-percentile API response time over a one-minute window |
+
+### What CI verifies versus what you demonstrate locally
+
+The workflow deploys both monitoring components and waits for their rollouts,
+but its smoke test only asserts that the API exposes a succeeded-job metric:
+
+```python
+# From scripts/smoke.py; response is the result of GET /metrics.
+assert b'prediction_jobs{status="succeeded"}' in response.read()
+```
+
+Read the [smoke-test assertion](../scripts/smoke.py#L55-L58). CI does not separately
+assert a successful Prometheus scrape or render the Grafana dashboard. Its
+temporary monitoring environment is removed during cluster cleanup.
+
+On your laptop, start the demo and its port-forwards using the
+[local restart instructions](LOCAL-DEMO.md#start-again-after-a-reboot), then:
+
+1. Open [API metrics](http://localhost:8000/metrics) to see raw measurements.
+2. Open [Prometheus targets](http://localhost:9090/targets); the API target should be `UP`.
+3. Open the [Grafana Iris dashboard](http://localhost:3000/d/iris-demo), using `admin` / `admin`.
+4. Submit predictions in [Swagger](http://localhost:8000/docs), poll their results,
+   and watch the dashboard after a few scrapes. Rate/latency panels need enough
+   samples; a single quick request may not produce an obvious chart change.
+
+This demo scrapes one API Service target, suitable for its single API replica.
+Multiple API replicas need per-Pod discovery and appropriate aggregation.
+Queue age, end-to-end job duration, worker-specific metrics, and alert rules
+are not configured. Prometheus history is ephemeral in this demo; Grafana's
+dashboard is recreated from the provisioned file.
+
 ## Interview wording
 
 "Each main-branch push tests the code, builds an image, deploys it to temporary
 Kubernetes using Terraform, trains a model, verifies a real asynchronous prediction,
-and removes the test environment. My laptop demo is managed separately."
+and removes the test environment. Prometheus scrapes the API's metrics, including
+persisted job counts, and Grafana displays them. CI checks the metrics endpoint;
+I demonstrate the scrape target and dashboard locally. My laptop demo is managed separately."

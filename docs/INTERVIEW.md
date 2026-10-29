@@ -387,7 +387,8 @@ optional for Kubernetes, but helps manage that configuration consistently."
 ## 5. CI/CD and monitoring — 2 minutes
 
 For the full diagram, commands, and configuration links, open the
-[CI/CD walkthrough](CI-CD-WALKTHROUGH.md).
+[CI/CD and monitoring walkthrough](CI-CD-WALKTHROUGH.md), including the
+[API -> Prometheus -> Grafana monitoring diagram and configuration](CI-CD-WALKTHROUGH.md#7-monitoring-api-metrics-prometheus-and-grafana).
 
 Show the [GitHub Actions workflow](../.github/workflows/ci.yml): test against PostgreSQL; Terraform fmt/validate; build an image identified by commit; deploy temporary kind; train; smoke test the real async path with [scripts/smoke.py](../scripts/smoke.py); cleanup. Read [tests/test_app.py](../tests/test_app.py) for the application tests and open [Actions runs](https://github.com/jimwangllm-agentic/mini-mlops/actions) for execution results. PRs test, while main pushes also deploy. The deployment lives on the hosted runner and is deleted afterwards; it does not update the laptop automatically.
 
