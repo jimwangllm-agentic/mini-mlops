@@ -118,6 +118,32 @@ Retrain with `docker compose run --rm train` (Compose mode). Submit a new reques
 
 ## 4. Packaging and orchestration — 2 minutes
 
+### First understand the Kubernetes names
+
+Kubernetes is the manager that keeps application containers running. Terraform
+sends it the desired configuration through its API. The terms below describe
+different things; a Deployment is not itself a running container.
+
+| Term | Plain-English meaning | In this demo |
+|---|---|---|
+| Image | Packaged software used to start a container | `mini-mlops:local` contains Python, our code, and libraries |
+| Container | A running instance of that packaged software | A process running Celery, FastAPI, Redis, etc. |
+| Pod | The unit Kubernetes schedules onto a node; can contain one or more containers | Each service Pod here contains one container |
+| Node | A machine/environment that runs Pods | kind uses the Docker container `mini-mlops-control-plane` as our one local node |
+| Cluster | The complete Kubernetes system: its control plane and nodes | The local kind cluster named `mini-mlops` |
+| Deployment | Defines a Pod template and desired replica count; manages ReplicaSets for updates | `worker` asks for one copy of the Celery worker by default |
+| ReplicaSet | Maintains the requested number of matching Pods | The worker's ReplicaSet creates a replacement if its Pod disappears |
+| Replica | One copy of a Pod, not a separate kind of running process | Two worker replicas means two worker Pods, each with one Celery container |
+| Job | Runs finite work until successful completion | A training Job runs `python -m app.train`, registers the model, then finishes |
+| Service | A stable internal network address routing to matching ready Pods | `api:8000` still works when the individual API Pod is replaced |
+| Namespace | A named grouping of Kubernetes resources | `mini-mlops` groups this project's Deployments, Pods, Services, and storage |
+| PersistentVolumeClaim / PVC | Requests storage that can outlive a Pod | PostgreSQL's claim lets a replacement Pod reuse saved prediction records |
+| ConfigMap | Stores non-secret configuration files/settings | Prometheus scrape settings and Grafana's provisioned dashboard files |
+
+The [plain-English comments in main.tf](../terraform/main.tf) translate each
+resource into requests such as: "Hi Kubernetes, please maintain a worker
+Deployment with one Pod, using this image and Celery command."
+
 Show [Dockerfile](../Dockerfile): Python 3.12 and pinned direct dependencies in [requirements.txt](../requirements.txt). The same image has different commands for API, worker, training, and MLflow in [compose.yaml](../compose.yaml). This reduces demo setup, though production commonly splits image dependencies and runs non-root containers.
 
 Read [terraform/main.tf](../terraform/main.tf) for Kubernetes resources and [scripts/deploy.sh](../scripts/deploy.sh) for deployment and training. Follow [README: Run Kubernetes + Terraform](../README.md#6-run-kubernetes--terraform) for setup and port-forwarding.
@@ -183,6 +209,25 @@ of one desired. Older ReplicaSets with zero desired/current Pods can remain afte
 updates; they do not mean extra workers are running. The completed training Pod
 is created by a Kubernetes Job, so it does not belong to this Deployment chain.
 See [the beginner explanation](BEGINNER-GUIDE.md#show-deployments-replicasets-and-pods).
+
+The node hosts the Pod/container; the Deployment and ReplicaSet are the objects
+that manage how many Pods should exist. If a container crashes, Kubernetes can
+restart it in the same Pod. If a managed Pod disappears, its ReplicaSet creates
+a replacement Pod. Scaling the worker from one to two replicas keeps the same
+Deployment and increases its ReplicaSet's desired Pod count to two.
+
+Training follows a different ownership chain:
+
+```text
+Training Job: run the training program to completion
+    -> Training Pod: assigned to the local node
+        -> Container: runs python -m app.train, then exits
+```
+
+A prediction's UUID is an **application job**, stored in PostgreSQL and queued
+through Redis. Submitting a prediction does not create a new Kubernetes Job or
+Pod: an already-running Celery worker Pod processes that message. A GitHub Actions
+job is another meaning of the word: a group of CI/CD steps on a runner.
 
 Then show Terraform's infrastructure preview and manual worker scaling:
 

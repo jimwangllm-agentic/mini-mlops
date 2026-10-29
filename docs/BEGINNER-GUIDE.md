@@ -94,6 +94,7 @@ Python prediction code stays the same.
 | Namespace | A grouping named `mini-mlops` that keeps this demo's resources together |
 | Pod | The unit Kubernetes runs; in this demo each app Pod contains one service container |
 | Deployment | Requests a number of Pods and replaces them when they exit/fail |
+| ReplicaSet | Maintains a requested number of matching Pods; a Deployment manages it |
 | Replica | One copy of a Pod; two worker replicas can process two tasks concurrently here |
 | Service | Stable internal network address that routes to matching ready Pods |
 | Label | A resource tag such as `app=worker`, used for selection and routing |
