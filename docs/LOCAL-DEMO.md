@@ -82,13 +82,18 @@ Run these two lines to show the main components during the demo:
 
 ```bash
 source /mnt/c/Users/pcc20/Documents/Codex/2026-10-28/can-x20/outputs/mini-mlops/demo-env.sh
-kubectl --context kind-mini-mlops -n mini-mlops get deployments
+kubectl --context kind-mini-mlops -n mini-mlops get deployments,pods,services,jobs
 ```
 
-The first line loads the demo's tools and cluster configuration. The second lists
-API, worker, Redis, PostgreSQL, MLflow, Prometheus, and Grafana Deployments.
-Each should show `READY 1/1` by default: one ready Pod out of one requested.
-If you scale the worker, its count should match, for example `READY 3/3`.
+The first line loads the demo's tools and cluster configuration. The second shows
+four important resource types:
+
+| Resource type | What to demonstrate |
+|---|---|
+| Deployments | Each component's ready replicas, normally `1/1`; the worker shows `3/3` if scaled to three |
+| Pods | Application Pods are `Running` and ready; the completed training Pod can show `Completed` and `0/1` |
+| Services | Internal network addresses and ports for components such as API, Redis, and PostgreSQL |
+| Jobs | Model training finished with `COMPLETIONS 1/1`; prediction requests are stored in PostgreSQL, not listed as Kubernetes Jobs |
 
 ## Monitor a prediction in WSL
 

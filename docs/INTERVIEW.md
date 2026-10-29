@@ -163,12 +163,18 @@ For another machine, complete the README setup and select its kind context inste
 
 ```bash
 source /mnt/c/Users/pcc20/Documents/Codex/2026-10-28/can-x20/outputs/mini-mlops/demo-env.sh
-kubectl --context kind-mini-mlops -n mini-mlops get deployments
+kubectl --context kind-mini-mlops -n mini-mlops get deployments,pods,services,jobs
 ```
 
-This compact view lists API, worker, Redis, PostgreSQL, MLflow, Prometheus, and
-Grafana Deployments. By default, each should show `READY 1/1`: one ready Pod out
-of one requested. After worker scaling, expect `2/2` or `3/3` for that Deployment.
+This command shows four important resource types for the demo:
+
+| Resource type | What to look for |
+|---|---|
+| Deployments | Desired/ready copies of each component; `READY 1/1` by default, or `3/3` after scaling a worker to three replicas |
+| Pods | Application Pods should be `Running` and ready; the finished training Pod can show `Completed` and `0/1` |
+| Services | Internal network addresses and ports for API, Redis, PostgreSQL, and other exposed components |
+| Jobs | The model-training Job should show `COMPLETIONS 1/1`; prediction requests are database records, not Kubernetes Jobs |
+
 If the cluster is stopped after a reboot, use the [restart guide](LOCAL-DEMO.md#start-again-after-a-reboot).
 See [the beginner status explanation](BEGINNER-GUIDE.md#check-kubernetes-status-in-wsl) for individual command parts.
 
