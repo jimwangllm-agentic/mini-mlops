@@ -89,8 +89,16 @@ kubectl --context kind-mini-mlops -n mini-mlops exec deployment/redis -- redis-c
 kubectl --context kind-mini-mlops -n mini-mlops exec deployment/redis -- redis-cli LINDEX celery 0
 
 # Latest submitted job, with input, status, saved prediction, and any error.
-kubectl --context kind-mini-mlops -n mini-mlops exec deployment/postgres -- psql -U demo -d demo -x -c "SELECT id, status, features, result, error, created_at FROM prediction_jobs ORDER BY created_at DESC LIMIT 1;"
+kubectl --context kind-mini-mlops -n mini-mlops exec deployment/postgres -- \
+  psql -U demo -d demo -x -c \
+  "SELECT * FROM prediction_jobs ORDER BY created_at DESC LIMIT 1;"
 ```
+
+`-U demo` selects the database user, `-d demo` selects the database, and `-x`
+displays each field on its own line. `ORDER BY created_at DESC` puts the newest
+submitted job first; `LIMIT 1` displays only that record. Change it to `LIMIT 3`
+to see the latest three jobs. See the [local demo monitoring commands](LOCAL-DEMO.md#monitor-a-prediction-in-wsl)
+for Celery logs, Redis queue writes, and the last three PostgreSQL records together.
 
 Redis is a queue here, not completed-task history: after a task is consumed and
 acknowledged, its message is removed. `LLEN` returning `0` does not mean that no

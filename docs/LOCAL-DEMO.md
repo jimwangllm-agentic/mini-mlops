@@ -76,6 +76,91 @@ From the same PowerShell folder:
 The same commands work in WSL as `bash demo.sh status`, `bash demo.sh scale 2`, etc.
 Do not run `compose` and `start` simultaneously.
 
+## Monitor a prediction in WSL
+
+Start the Kubernetes demo using the reboot steps above. Open three **Ubuntu WSL**
+terminals and run this in **each terminal** to select the project's tools and cluster:
+
+```bash
+source /mnt/c/Users/pcc20/Documents/Codex/2026-10-28/can-x20/outputs/mini-mlops/demo-env.sh
+```
+
+### 1. Monitor Celery: watch received and completed tasks
+
+In the first terminal, start the logs before submitting a request:
+
+```bash
+# Select all current worker Pods, including replicas added for the scaling demo.
+# --tail=20 shows recent lines; -f keeps following new lines.
+# --prefix identifies the Pod/container; allow up to 10 simultaneous log streams.
+kubectl --context kind-mini-mlops -n mini-mlops logs -l app=worker \
+  --tail=20 -f --prefix=true --max-log-requests=10
+```
+
+Submit a prediction in [Swagger](http://localhost:8000/docs). Match the returned
+job UUID to `Task predict[UUID] received` and `Task predict[UUID] succeeded`.
+`succeeded ...: None` is expected: the prediction is saved in PostgreSQL.
+`celery inspect active` can be empty because these predictions finish quickly.
+If you change worker replicas after opening the logs, restart this command to
+include the new Pods. Ctrl+C stops watching the logs; workers continue running.
+
+### 2. Monitor Redis: watch new messages entering the queue
+
+In the second terminal, start this before submitting a request:
+
+```bash
+# MONITOR streams commands as they happen; it does not show historical messages.
+# grep displays LPUSH writes to the default celery queue immediately.
+kubectl --context kind-mini-mlops -n mini-mlops exec deployment/redis -- \
+  redis-cli MONITOR | grep --line-buffered -i '"LPUSH" "celery"'
+```
+
+An `LPUSH` line shows a message being added to Redis. Celery's `received` log
+shows it being consumed. Stop this debugging view with Ctrl+C when finished.
+To check the number still waiting, run this separately:
+
+```bash
+# LLEN counts waiting messages, excluding tasks already executing.
+kubectl --context kind-mini-mlops -n mini-mlops exec deployment/redis -- redis-cli LLEN celery
+```
+
+A count of `0` is normal when workers have already consumed the messages.
+Redis is the queue here; PostgreSQL retains the job records and predictions.
+
+### 3. PostgreSQL: query the last three submitted jobs
+
+In the third terminal, run this after submitting a prediction:
+
+```bash
+# Run psql inside the PostgreSQL container, using user demo and database demo.
+# -x prints one field per line; -c executes the SQL query below.
+# DESC sorts newest submissions first; LIMIT 3 returns at most three records.
+kubectl --context kind-mini-mlops -n mini-mlops exec deployment/postgres -- \
+  psql -U demo -d demo -x -c \
+  "SELECT * FROM prediction_jobs ORDER BY created_at DESC LIMIT 3;"
+```
+
+Look at `id` (the same UUID), `features` (input), `status`, `result` (prediction),
+`error`, and `created_at` (submission time). A queued/running job can have an empty
+result; rerun the query after it finishes. These are the last three **submitted**
+jobs, not necessarily the last three completed jobs. Change `LIMIT 3` to `LIMIT 1`
+to see only the newest submission.
+
+For an automatically refreshed view, run this in the PostgreSQL terminal instead:
+
+```bash
+# Open interactive psql and enter the following SQL and psql command inside it.
+kubectl --context kind-mini-mlops -n mini-mlops exec -it deployment/postgres -- psql -U demo -d demo -x
+```
+
+```sql
+SELECT * FROM prediction_jobs ORDER BY created_at DESC LIMIT 3;
+\watch 2
+```
+
+`\watch 2` repeats the query every two seconds. Press Ctrl+C to stop refreshing,
+then type `\q` to exit psql.
+
 ## Understand the files before explaining them
 
 1. Read the [beginner guide](../docs/BEGINNER-GUIDE.md).
