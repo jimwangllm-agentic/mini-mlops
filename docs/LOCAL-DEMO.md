@@ -127,24 +127,23 @@ kubectl --context kind-mini-mlops -n mini-mlops exec deployment/redis -- redis-c
 A count of `0` is normal when workers have already consumed the messages.
 Redis is the queue here; PostgreSQL retains the job records and predictions.
 
-### 3. PostgreSQL: query the last three submitted jobs
+### 3. PostgreSQL: query the latest submitted job
 
 In the third terminal, run this after submitting a prediction:
 
 ```bash
 # Run psql inside the PostgreSQL container, using user demo and database demo.
 # -x prints one field per line; -c executes the SQL query below.
-# DESC sorts newest submissions first; LIMIT 3 returns at most three records.
+# DESC sorts newest submissions first; LIMIT 1 returns only the latest record.
 kubectl --context kind-mini-mlops -n mini-mlops exec deployment/postgres -- \
   psql -U demo -d demo -x -c \
-  "SELECT * FROM prediction_jobs ORDER BY created_at DESC LIMIT 3;"
+  "SELECT * FROM prediction_jobs ORDER BY created_at DESC LIMIT 1;"
 ```
 
 Look at `id` (the same UUID), `features` (input), `status`, `result` (prediction),
 `error`, and `created_at` (submission time). A queued/running job can have an empty
-result; rerun the query after it finishes. These are the last three **submitted**
-jobs, not necessarily the last three completed jobs. Change `LIMIT 3` to `LIMIT 1`
-to see only the newest submission.
+result; rerun the query after it finishes. This is the latest **submitted** job,
+not necessarily the latest completed job.
 
 For an automatically refreshed view, run this in the PostgreSQL terminal instead:
 
@@ -154,7 +153,7 @@ kubectl --context kind-mini-mlops -n mini-mlops exec -it deployment/postgres -- 
 ```
 
 ```sql
-SELECT * FROM prediction_jobs ORDER BY created_at DESC LIMIT 3;
+SELECT * FROM prediction_jobs ORDER BY created_at DESC LIMIT 1;
 \watch 2
 ```
 
