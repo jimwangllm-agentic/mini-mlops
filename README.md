@@ -6,6 +6,8 @@ An interview demo for Windows + Ubuntu WSL2. Predict an Iris flower from four me
 
 New to these tools? Read the [beginner's guide](docs/BEGINNER-GUIDE.md) first. The Python functions, Compose settings, CI workflow, Dockerfile, and deployment script include explanations beside the code.
 
+**Already set up on your laptop?** Follow [Start again after a reboot](docs/LOCAL-DEMO.md#start-again-after-a-reboot). That guide includes the prepared laptop's paths, start/stop commands, and demo URLs; the helper scripts are included in this repository.
+
 ```mermaid
 flowchart LR
     U[Client / Swagger] -->|POST /jobs| A[FastAPI]
