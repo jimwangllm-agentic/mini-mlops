@@ -16,17 +16,20 @@ from app.db import Base, engine  # noqa: E402
 
 @pytest.fixture(autouse=True)
 def clean_db():
+    """Start each test with empty job tables in the disposable test database."""
     Base.metadata.drop_all(engine)
     Base.metadata.create_all(engine)
     yield
 
 
 def pytest_sessionfinish(session, exitstatus):
+    """Close pooled database connections when pytest finishes all tests."""
     engine.dispose()  # Release pooled SQLite handles on Windows.
 
 
 @pytest.fixture(scope="session")
 def trained_model():
+    """Train/register a real model once, using a temporary MLflow database."""
     import mlflow
     from app.train import main
 

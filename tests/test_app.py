@@ -8,25 +8,34 @@ from app.tasks import predict
 
 @pytest.fixture
 def client():
+    """Run FastAPI in-process for a test, including its startup/shutdown hooks."""
     with TestClient(app) as c:
         yield c
 
 
 @pytest.mark.parametrize("features", [[1, 2], [1, 2, 3, 4, 5], [-1, 2, 3, 4], [0, 2, 3, 4], [21, 2, 3, 4], ["bad", 2, 3, 4]])
 def test_invalid_input(client, features):
+    """Check that malformed or out-of-range measurements receive HTTP 422."""
     assert client.post("/jobs", json={"features": features}).status_code == 422
 
 
 def test_health_and_unknown_job(client):
+    """Check readiness and distinguish an unknown UUID from a malformed ID."""
     assert client.get("/health").status_code == 200
     assert client.get("/jobs/00000000-0000-0000-0000-000000000001").status_code == 404
     assert client.get("/jobs/not-a-uuid").status_code == 422
 
 
 def test_real_model_job_lifecycle(client, monkeypatch, trained_model):
+    """Submit a job, execute real inference, and verify saved results and metrics.
+
+    Only queue publication is replaced; DB operations and model loading/prediction
+    are real. scripts/smoke.py separately checks the actual Redis/Celery path.
+    """
     queued = []
 
     def enqueue(args, task_id):
+        """Capture the queued ID and check that its DB row was committed first."""
         # The DB transaction must be visible before enqueue.
         with Session() as db:
             assert db.get(Job, task_id).status == "queued"
@@ -51,7 +60,9 @@ def test_real_model_job_lifecycle(client, monkeypatch, trained_model):
 
 
 def test_broker_failure_persists_failure(client, monkeypatch):
+    """Simulate Redis being unavailable; expect HTTP 503 and a failed job row."""
     def fail(**kwargs):
+        """Stand in for a broker connection that cannot publish the task."""
         raise ConnectionError("broker down")
     monkeypatch.setattr(predict, "apply_async", fail)
     response = client.post("/jobs", json={"features": [5.1, 3.5, 1.4, 0.2]})
@@ -62,10 +73,13 @@ def test_broker_failure_persists_failure(client, monkeypatch):
 
 
 def test_model_failure_persists_failure(client, monkeypatch):
+    """Simulate MLflow being unavailable and check the worker saves a safe error."""
     from app import tasks
     monkeypatch.setattr(predict, "apply_async", lambda **kwargs: None)
     class UnavailableRegistry:
+        """Small substitute for a failing MLflow client."""
         def get_model_version_by_alias(self, *args):
+            """Raise the connection error the worker must handle."""
             raise ConnectionError("private dependency detail")
     monkeypatch.setattr(tasks, "MlflowClient", UnavailableRegistry)
     job_id = client.post("/jobs", json={"features": [5.1, 3.5, 1.4, 0.2]}).json()["id"]
