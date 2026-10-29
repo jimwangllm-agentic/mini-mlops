@@ -4,6 +4,8 @@ An interview demo for Windows + Ubuntu WSL2. Predict an Iris flower from four me
 
 **Start with Docker Compose, then run the same application on Kubernetes with Terraform.** All nine requested technology groups do real work. The Python application is only five small modules.
 
+New to these tools? Read the [beginner's guide](docs/BEGINNER-GUIDE.md) first. The Python functions, Compose settings, CI workflow, Dockerfile, and deployment script include explanations beside the code.
+
 ```mermaid
 flowchart LR
     U[Client / Swagger] -->|POST /jobs| A[FastAPI]

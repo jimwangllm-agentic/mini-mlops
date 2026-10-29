@@ -24,7 +24,7 @@ for attempt in range(90):
     try:
         request("/health")
         break
-    except (URLError, TimeoutError):
+    except (URLError, TimeoutError, ConnectionError):
         time.sleep(2)
 else:
     raise SystemExit("API did not become healthy within 180 seconds")

@@ -1,81 +1,154 @@
-name: mini-mlops
+# Docker Compose starts related containers on this laptop.
+# Run: docker compose up --build -d
+# YAML: indentation groups settings; '-' starts a list; '#' begins a comment.
+name: mini-mlops # Prefix for the project's containers, network, and storage.
+
+# x- marks reusable settings, not a container. &app names this block.
+# Services reuse it below with <<: *app (YAML's merge/alias syntax).
 x-app: &app
-  image: mini-mlops:local
-  build: .
+  image: mini-mlops:local # Packaged application image; 'local' is its tag.
+  build: . # Build that image using the Dockerfile in this project folder.
+  # Configuration read by Python inside the containers, shared with this app block.
   environment: &env
+    # driver://user:password@hostname:port/database; postgres is a service name below.
     DATABASE_URL: postgresql+psycopg2://demo:demo@postgres:5432/demo
+    # Redis holds queued tasks; /0 selects Redis's logical database zero.
     REDIS_URL: redis://redis:6379/0
+    # MLflow's HTTP address for experiment logging and model loading.
     MLFLOW_TRACKING_URI: http://mlflow:5000
+
+# Each entry under services describes one container's role.
 services:
+  # DATABASE: persistent inputs, statuses, predictions, and model versions.
   postgres:
-    image: postgres:16.8-alpine
+    image: postgres:16.8-alpine # Download the PostgreSQL 16.8 Alpine-based image.
+    # The official PostgreSQL image reads these during first initialization.
     environment:
-      POSTGRES_USER: demo
-      POSTGRES_PASSWORD: demo
-      POSTGRES_DB: demo
+      POSTGRES_USER: demo # Create this database user.
+      POSTGRES_PASSWORD: demo # Local demo password for that user.
+      POSTGRES_DB: demo # Create this database.
+    # volume_name:container_folder. Docker keeps this data after container removal.
     volumes: ["postgres:/var/lib/postgresql/data"]
     healthcheck:
+      # CMD-SHELL runs a shell command inside the container.
+      # pg_isready checks connections; -U chooses the user; -d chooses the DB.
       test: ["CMD-SHELL", "pg_isready -U demo -d demo"]
-      interval: 3s
-      timeout: 3s
-      retries: 30
+      interval: 3s # Repeat every three seconds.
+      timeout: 3s # Fail an individual check if it takes longer than three seconds.
+      retries: 30 # Mark unhealthy after 30 consecutive failures.
+
+  # QUEUE: holds task messages until a Celery worker receives them.
   redis:
     image: redis:7.4.2-alpine
+    # command replaces the image's normal startup command.
+    # Start Redis; --appendonly yes saves writes in an append-only disk file.
     command: ["redis-server", "--appendonly", "yes"]
-    volumes: ["redis:/data"]
+    volumes: ["redis:/data"] # Persist those Redis files in named storage.
     healthcheck:
+      # CMD runs a program directly; redis-cli ping should respond PONG.
       test: ["CMD", "redis-cli", "ping"]
-      interval: 3s
-      timeout: 3s
-      retries: 30
+      interval: 3s # Check frequency.
+      timeout: 3s # Maximum time per check.
+      retries: 30 # Failure threshold.
+
+  # MODEL SERVER: experiment UI, registered model versions, and model files.
   mlflow:
-    <<: *app
-    command: ["mlflow", "server", "--host", "0.0.0.0", "--port", "5000", "--backend-store-uri", "sqlite:////mlflow/mlflow.db", "--serve-artifacts", "--artifacts-destination", "/mlflow/artifacts", "--workers", "1"]
+    <<: *app # Inherit image, build, and environment from &app above.
+    # Each item is a separate command-line argument, not a separate command.
+    command:
+      - mlflow
+      - server # Start the HTTP server and web UI.
+      - --host
+      - 0.0.0.0 # Listen on network interfaces inside the container.
+      - --port
+      - "5000" # HTTP port INSIDE this container; quoted to keep a string argument.
+      - --backend-store-uri
+      - sqlite:////mlflow/mlflow.db # Store MLflow metadata in this SQLite file.
+      - --serve-artifacts # Upload/download saved models through the HTTP server.
+      - --artifacts-destination
+      - /mlflow/artifacts # Container folder containing the model files.
+      - --workers
+      - "1" # One server worker keeps this demo's memory use smaller.
+    # HOST_IP:HOST_PORT:CONTAINER_PORT; localhost:5000 opens this server.
+    # 127.0.0.1 limits the published port to the laptop's loopback interface.
     ports: ["127.0.0.1:5000:5000"]
-    volumes: ["mlflow:/mlflow"]
+    volumes: ["mlflow:/mlflow"] # Persist both the SQLite DB and model artifacts.
     healthcheck:
+      # python -c executes the following short Python statement.
+      # It checks MLflow's health endpoint; localhost here means THIS container.
       test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:5000/health')"]
       interval: 5s
       timeout: 5s
       retries: 40
-      start_period: 20s
+      start_period: 20s # Startup grace period before counting initial check failures.
+
+  # TRAINING: one-off process that trains, registers a model, and then exits.
   train:
     <<: *app
+    # python -m executes a Python module: app.train means app/train.py.
     command: ["python", "-m", "app.train"]
     depends_on:
+      # Do not start training until the model server's health check succeeds.
       mlflow: {condition: service_healthy}
+
+  # API: validates HTTP requests, stores input, and enqueues prediction task IDs.
   api:
     <<: *app
-    ports: ["127.0.0.1:8000:8000"]
+    # No command override: the Dockerfile's default command starts uvicorn/FastAPI.
+    ports: ["127.0.0.1:8000:8000"] # Browser: http://localhost:8000/docs
     depends_on:
-      postgres: {condition: service_healthy}
-      redis: {condition: service_healthy}
+      postgres: {condition: service_healthy} # Wait for database readiness.
+      redis: {condition: service_healthy} # Wait for queue readiness.
+      # Unlike a health check, this requires training to EXIT with code 0 (success).
       train: {condition: service_completed_successfully}
     healthcheck:
+      # GET /health checks the API and its connection to PostgreSQL.
       test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8000/health')"]
       interval: 5s
       timeout: 5s
       retries: 30
+
+  # WORKER: listens to Redis and calls your predict(job_id) Python function.
   worker:
     <<: *app
-    command: ["celery", "-A", "app.tasks:celery", "worker", "--loglevel=info", "--concurrency=1"]
+    command:
+      - celery
+      - -A
+      - app.tasks:celery # Import the 'celery' object from app/tasks.py.
+      - worker # Start Celery's long-running task consumer.
+      - --loglevel=info # Print task activity and failures to container logs.
+      - --concurrency=1 # Execute one prediction task at a time in this container.
     depends_on:
+      # API startup creates the job table, so wait for that API to be ready first.
       api: {condition: service_healthy}
+
+  # METRICS: periodically scrapes the API's /metrics HTTP endpoint.
   prometheus:
     image: prom/prometheus:v3.3.0
+    # laptop_file:container_file:ro is a bind mount; ro means read-only.
+    # This file supplies the scrape target (api:8000) and five-second interval.
     volumes: ["./monitoring/prometheus.yml:/etc/prometheus/prometheus.yml:ro"]
-    ports: ["127.0.0.1:9090:9090"]
+    ports: ["127.0.0.1:9090:9090"] # Browser UI for queries and scrape-target health.
+
+  # DASHBOARD: asks Prometheus for metrics and turns them into browser charts.
   grafana:
     image: grafana/grafana:11.6.1
     environment:
-      GF_SECURITY_ADMIN_USER: admin
-      GF_SECURITY_ADMIN_PASSWORD: demo-admin
+      GF_SECURITY_ADMIN_USER: admin # Browser login username.
+      GF_SECURITY_ADMIN_PASSWORD: demo-admin # Browser login password for this demo.
     volumes:
+      # Automatically configure the connection to Prometheus.
       - ./monitoring/datasource.yml:/etc/grafana/provisioning/datasources/default.yml:ro
+      # Tell Grafana which folder contains provisioned dashboard definitions.
       - ./monitoring/dashboard-provider.yml:/etc/grafana/provisioning/dashboards/default.yml:ro
+      # Provide the actual dashboard panels and their PromQL queries.
       - ./monitoring/dashboard.json:/var/lib/grafana/dashboards/iris.json:ro
-    ports: ["127.0.0.1:3000:3000"]
+    ports: ["127.0.0.1:3000:3000"] # Grafana's browser UI.
+
+# Declare named storage volumes. Docker manages their disk locations.
+# Unlike monitoring file bind mounts, these volumes store data written by services.
+# 'docker compose down' retains them; 'docker compose down -v' deletes them.
 volumes:
-  postgres:
-  redis:
-  mlflow:
+  postgres: # Application job records.
+  redis: # Queued tasks and Redis persistence files.
+  mlflow: # Experiments, model registry metadata, and model artifacts.

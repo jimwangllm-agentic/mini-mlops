@@ -1,75 +1,117 @@
-name: test-and-deploy
+# GitHub runs this workflow on temporary runner machines, not on your laptop.
+# CI tests code; CD builds/deploys it and verifies the resulting application.
+name: test-and-deploy # Display name shown in the repository's Actions tab.
+
+# Events that start the workflow.
 on:
   push:
-    branches: [main]
-  pull_request:
-  workflow_dispatch:
+    branches: [main] # A push to main runs tests and deployment.
+  pull_request: # A pull request runs tests; the deploy job is skipped below.
+  workflow_dispatch: # Adds a manual 'Run workflow' button in Actions.
+
+# Permissions of the workflow's short-lived GitHub token.
 permissions:
-  contents: read
+  contents: read # Source checkout requires read access; no write access is needed.
+
+# Avoid wasting runner resources on outdated builds of the same branch/ref.
 concurrency:
+  # GitHub evaluates ${{ ... }}. github.ref identifies the triggering Git ref.
   group: ci-${{ github.ref }}
-  cancel-in-progress: true
+  cancel-in-progress: true # A newer run in the same group cancels the old run.
+
+# A GitHub Actions job groups steps on a runner. This is different from a
+# prediction job in our application or a one-off Kubernetes Job resource.
 jobs:
   test:
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-latest # Request a temporary Ubuntu runner from GitHub.
+    # A service container runs beside the test process, providing real PostgreSQL.
     services:
       postgres:
         image: postgres:16.8-alpine
-        env:
+        env: # The PostgreSQL image creates this user/database on first startup.
           POSTGRES_USER: demo
           POSTGRES_PASSWORD: demo
-          POSTGRES_DB: demo_test
+          POSTGRES_DB: demo_test # Disposable test DB, separate from application data.
+        # runner_port:container_port makes the DB reachable on localhost:5432.
         ports: ["5432:5432"]
+        # >- folds these YAML lines into one space-separated string of Docker options.
+        # pg_isready checks connections; -U selects the user; -d selects the DB.
+        # Check every 5s, allow 5s per attempt, fail after 20 consecutive failures.
         options: >-
           --health-cmd "pg_isready -U demo -d demo_test"
           --health-interval 5s --health-timeout 5s --health-retries 20
     env:
+      # tests/conftest.py reads this to select PostgreSQL instead of temporary SQLite.
       TEST_DATABASE_URL: postgresql+psycopg2://demo:demo@localhost:5432/demo_test
+    # Steps run in order. A failed step normally stops subsequent normal steps.
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-python@v5
-        with:
-          python-version: '3.12'
-          cache: pip
+      # 'uses' invokes a reusable action: its repository name @ its version.
+      - uses: actions/checkout@v4 # Download this repository's source onto the runner.
+      - uses: actions/setup-python@v5 # Make Python available to subsequent commands.
+        with: # Input settings for this reusable action.
+          python-version: '3.12' # Match the Docker image's Python major/minor version.
+          cache: pip # Cache downloaded packages to speed up future runs.
+      # 'run' executes a shell command on the runner. pip installs listed dependencies.
       - run: pip install -r requirements.txt
+      # python -m executes a module; pytest discovers tests; -q prints shorter output.
       - run: python -m pytest -q
-      - uses: hashicorp/setup-terraform@v3
+      - uses: hashicorp/setup-terraform@v3 # Install the infrastructure CLI.
         with:
           terraform_version: 1.11.4
+      # -chdir=terraform means run inside the terraform/ folder.
+      # fmt -check fails if the file would need formatting changes.
       - run: terraform -chdir=terraform fmt -check
+      # init downloads provider plugins. -backend=false skips state backend setup.
       - run: terraform -chdir=terraform init -backend=false
+      # validate checks syntax and resource schemas; it does not deploy anything.
       - run: terraform -chdir=terraform validate
+
   deploy:
-    if: github.event_name != 'pull_request'
-    needs: test
-    runs-on: ubuntu-latest
-    timeout-minutes: 25
+    if: github.event_name != 'pull_request' # Skip deployment for PR events.
+    needs: test # Start only after the test job succeeds.
+    runs-on: ubuntu-latest # A new runner, independent of the test runner.
+    timeout-minutes: 25 # Stop the whole job if it exceeds this time limit.
     steps:
+      # Each new runner needs its own source checkout and installed tools.
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
         with:
-          python-version: '3.12'
+          python-version: '3.12' # Used by our standard-library smoke-test script.
       - uses: hashicorp/setup-terraform@v3
         with:
           terraform_version: 1.11.4
+      # kind creates local Kubernetes using Docker; kubectl talks to Kubernetes.
       - uses: helm/kind-action@v1.12.0
         with:
-          install_only: true
-          version: v0.27.0
-          kubectl_version: v1.32.2
+          install_only: true # Install tools only; deploy.sh creates the cluster.
+          version: v0.27.0 # Version of kind.
+          kubectl_version: v1.32.2 # Match the demo Kubernetes node version.
       - name: Build and deploy to temporary Kubernetes cluster
+        # github.sha is the commit ID. It identifies which source built the image.
+        # IMAGE=... supplies an environment variable to this one command.
+        # bash executes the script: build image, create/load kind, Terraform, training.
         run: IMAGE=mini-mlops:${{ github.sha }} bash scripts/deploy.sh
       - name: Verify real asynchronous prediction
+        # '|' preserves newlines: the following are two sequential shell commands.
+        # First: forward runner port 8000 to the API Service's port 8000.
+        # --context selects the cluster; -n selects the namespace (resource grouping).
+        # > file captures output; 2>&1 sends error output into that same log.
+        # Final '&' runs forwarding in the background so the next command can run.
+        # Second: submit a real prediction and check its status, result, and metrics.
         run: |
           kubectl --context kind-mini-mlops -n mini-mlops port-forward service/api 8000:8000 > /tmp/port-forward.log 2>&1 &
           python scripts/smoke.py
       - name: Diagnostics
-        if: failure()
+        if: failure() # Collect evidence only when an earlier step failed.
+        # get lists Pods, training Jobs, and PersistentVolumeClaims (storage requests).
+        # logs -l app=... selects by label; --tail=100 limits how many lines print.
+        # get events sorts Kubernetes startup/scheduling messages by time.
         run: |
           kubectl --context kind-mini-mlops -n mini-mlops get pods,jobs,pvc
           kubectl --context kind-mini-mlops -n mini-mlops logs -l app=api --tail=100
           kubectl --context kind-mini-mlops -n mini-mlops logs -l app=worker --tail=100
           kubectl --context kind-mini-mlops -n mini-mlops get events --sort-by=.lastTimestamp
       - name: Cleanup ephemeral cluster
-        if: always()
+        if: always() # Attempt cleanup on success or failure.
+        # Delete only the temporary kind cluster on this runner, not your laptop.
         run: kind delete cluster --name mini-mlops

@@ -1,5 +1,9 @@
 # A 10-minute interview walkthrough
 
+New to Docker, YAML, or Kubernetes? Start with the [beginner's guide](BEGINNER-GUIDE.md).
+The [Compose configuration](../compose.yaml), [CI workflow](../.github/workflows/ci.yml),
+[Dockerfile](../Dockerfile), and [deployment script](../scripts/deploy.sh) include comments explaining their settings and commands.
+
 Opening: "I built an asynchronous model-serving application. FastAPI validates requests; Redis buffers jobs; Celery workers run a versioned MLflow model; PostgreSQL persists results. Docker packages it. Terraform provisions the local Kubernetes resources. GitHub Actions tests and deploys the same stack to a temporary cluster. Prometheus and Grafana show operational metrics."
 
 ## 1. Request and validation — 1 minute
