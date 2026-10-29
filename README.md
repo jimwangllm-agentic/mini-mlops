@@ -57,6 +57,8 @@ Expected: Docker client/server information and the hello-world success message. 
 
 If cloning from GitHub:
 
+The repository is private. Your WSL Git client needs GitHub authentication for cloning; a GitHub account password is not accepted as a Git password. If Git is already authenticated in Windows, clone there with PowerShell, then open that directory through `/mnt/c/...` in WSL. You can also download the supplied project ZIP and skip cloning entirely.
+
 ```bash
 sudo apt-get update
 sudo apt-get install -y git
